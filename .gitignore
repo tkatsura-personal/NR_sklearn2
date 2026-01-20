@@ -1,0 +1,9 @@
+.vscode/*
+*.xlsx
+*.accdb
+*.csv
+*.pdf
+*.rtf
+MilkPlasma/*
+HuishiEnv/*
+__pycache__
