@@ -26,10 +26,13 @@ cat("Number of unique rats:", num_unique_rats, "\n")
 # Filter out rows with NA values
 onset_data <- drop_na(onset_data)
 
-# Get a list of rats where diet is New or Mix
-new_diet_rats <- unique(onset_data$NR_Name[onset_data$diet %in% c("New", "Mix", "Rab")])
+# Remove rats whose overall diet is Rab from onset_data
+rab_overall_rats <- onset %>%
+  filter(overall_diet == "Rod" & nursing_diet %in% c("Rab", "Rod")) %>%
+  pull(NR_Name)
+
 # Remove rats
-onset_data <- onset_data %>% filter(!onset_data$NR_Name %in% new_diet_rats)
+onset_data <- onset_data %>% filter(onset_data$NR_Name %in% rab_overall_rats)
 
 # Make a new table grouped by NR_Name and grabbing count
 onset_data_grouped <- onset_data %>%
@@ -43,8 +46,6 @@ single_measurement_rats <-
 onset_data_filtered <- onset_data %>%
   filter(!onset_data$NR_Name %in% single_measurement_rats)
 
-# Left join with onset
-#onset_data_filtered <- left_join(onset_data_filtered, onset, by = "NR_Name")
 # Remove rows where diet is not Rod or Rab
 onset_data_filtered <- onset_data_filtered %>%
   filter(diet %in% c("Rod", "Rab"))
@@ -62,12 +63,15 @@ survival_data <- onset_data_filtered %>%
   group_by(NR_Name) %>%
   slice_head(n = 1) %>%
   ungroup() %>%
-  select(NR_Name, Event_time, Event, sex, diet)
+  select(NR_Name, Event_time, Event, sex) %>%
+  merge(onset %>% select(NR_Name, nursing_diet)) %>% # nolint
+  rename(diet = "nursing_diet")
 longitudinal_data <- onset_data_filtered %>%
-  select(NR_Name, week, weight, rbg, diet, sex)
+  select(NR_Name, week, weight, rbg, sex) %>%
+  merge(onset %>% select(NR_Name, nursing_diet)) %>%
+  rename(diet = "nursing_diet")
 
-
-print(table(longitudinal_data$diet))
+print(table(survival_data$diet))
 
 # Turn chars into factors
 longitudinal_data$sex  <- factor(longitudinal_data$sex)
@@ -85,6 +89,7 @@ folds <- createFolds(unique(longitudinal_data$NR_Name), k = 5)
 results <- list()
 auc <- list()
 brier_score <- list()
+
 
 for (i in seq_along(folds)) {
   print(paste("Processing fold", i))
@@ -115,17 +120,19 @@ for (i in seq_along(folds)) {
 
   print(paste("Fitting joint model for fold", i))
   jm_fit <- jm(cox_fit, lme_fit, time_var = "week")
+  print(summary(jm_fit))
+  print(coef(jm_fit))
 
   # Example: prediction on test set
   print(paste("Predicting for fold", i))
-  preds_long <- predict(jm_fit, newdata = test_overall, 
+  preds_long <- predict(jm_fit, newdata = test_overall,
                         process = "longitudinal")
   preds_surv <- predict(jm_fit, newdata = test_overall, process = "event")
 
   # Collect results
-  rmse <- sqrt(mean((unlist(test_overall$rbg) - 
-                     unlist(preds_long$pred))^2, na.rm = TRUE))
-  mae  <- mean(abs(unlist(test_overall$rbg) - 
+  rmse <- sqrt(mean((unlist(test_overall$rbg) -
+                       unlist(preds_long$pred))^2, na.rm = TRUE))
+  mae  <- mean(abs(unlist(test_overall$rbg) -
                      unlist(preds_long$pred)), na.rm = TRUE)
 
   print("Calculating Brier Score and AUC")
@@ -140,12 +147,14 @@ for (i in seq_along(folds)) {
     traindata = train_surv,  # note: 'traindata' not 'train_data'
     times = times
   )
-  print(pec_res)
   print(pec::ibs(pec_res))  # Integrated Brier Score (one summary number)
 
   # Time-dependent AUC via timeROC
 
   lp <- predict(cox_fit, newdata = test_surv, type = "lp")  # linear predictor
+
+  # Pick a random NR_Name from test_surv
+  random_rat <- sample(test_surv$NR_Name, 1)
 
   auc_res <- timeROC::timeROC(
     T = test_surv$Event_time,
@@ -156,6 +165,7 @@ for (i in seq_along(folds)) {
     iid = FALSE
   )
   print(auc_res$AUC)  # AUC at each time point
+  append(auc, auc_res$AUC)
 
   print("Calculating C-index")
   cindex_res <- pec::cindex(
@@ -165,14 +175,14 @@ for (i in seq_along(folds)) {
     eval.times = sort(unique(test_surv$Event_time)),
     splitMethod = "none"   # manually looping folds
   )
-  print(cindex_res$AppCindex)
 
+  print(cindex_res$AppCindex)
   fold_results <- c(i, rmse, mae)
   results[[i]] <- fold_results
-
 }
 
 # Combine all fold results into a single data frame
 final_results <- do.call(rbind, results)
+print(auc)
 print("Cross-Validation Results:")
 print(final_results)
