@@ -24,9 +24,11 @@ for i in range(len(onset_RevisedOnset)):
 mergedData = measurement[["NR_Name", "week", "weight", "rbg", "diet",]].merge(onset_RevisedOnset[["NR_Name", "sex", "Event_time", "Event"]], on="NR_Name")
 #Subtract 4 from the week column
 mergedData["week"] = mergedData["week"] - 4
+print(mergedData.head(5))
+#mergedData mergedData.merge(onset_RevisedOnset)
 
-with open('onset_longitudinal.csv', 'w', newline='') as file:
-    writer = csv.writer(file)
-    writer.writerow(mergedData.columns)
-    for index, row in mergedData.iterrows():
-        writer.writerow(row)
+# with open('onset_longitudinal.csv', 'w', newline='') as file:
+#     writer = csv.writer(file)
+#     writer.writerow(mergedData.columns)
+#     for index, row in mergedData.iterrows():
+#         writer.writerow(row)

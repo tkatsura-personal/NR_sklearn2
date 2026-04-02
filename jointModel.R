@@ -1,6 +1,7 @@
 #installs and load the package "pacman"
 if (!require("pacman")) install.packages("pacman")
-pacman::p_load(dplyr, tidyr, ggplot2, nlme, survival, JMbayes2, caret, survAUC, pec)
+pacman::p_load(dplyr, tidyr, ggplot2, nlme,
+               survival, JMbayes2, caret, survAUC, pec, timeROC)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
@@ -10,6 +11,7 @@ library(JMbayes2)
 library(caret)
 library(survAUC)
 library(pec)
+library(timeROC)
 
 # Read onset_longitudinal
 onset_data <- read.csv("onset_longitudinal.csv")
@@ -25,7 +27,7 @@ cat("Number of unique rats:", num_unique_rats, "\n")
 onset_data <- drop_na(onset_data)
 
 # Get a list of rats where diet is New or Mix
-new_diet_rats <- unique(onset_data$NR_Name[onset_data$diet %in% c("New", "Mix")])
+new_diet_rats <- unique(onset_data$NR_Name[onset_data$diet %in% c("New", "Mix", "Rab")])
 # Remove rats
 onset_data <- onset_data %>% filter(!onset_data$NR_Name %in% new_diet_rats)
 
@@ -116,23 +118,44 @@ for (i in seq_along(folds)) {
 
   # Example: prediction on test set
   print(paste("Predicting for fold", i))
-  preds_long <- predict(jm_fit, newdata = test_overall, process = "longitudinal")
+  preds_long <- predict(jm_fit, newdata = test_overall, 
+                        process = "longitudinal")
   preds_surv <- predict(jm_fit, newdata = test_overall, process = "event")
 
   # Collect results
-  rmse <- sqrt(mean((unlist(test_overall$rbg) - unlist(preds_long$pred))^2, na.rm = TRUE))
-  mae  <- mean(abs(unlist(test_overall$rbg) - unlist(preds_long$pred)), na.rm = TRUE)
+  rmse <- sqrt(mean((unlist(test_overall$rbg) - 
+                     unlist(preds_long$pred))^2, na.rm = TRUE))
+  mae  <- mean(abs(unlist(test_overall$rbg) - 
+                     unlist(preds_long$pred)), na.rm = TRUE)
 
-  print("Calculating AUC and Brier Score")
-  # Calculate AUC and Brier Score using pec package
+  print("Calculating Brier Score and AUC")
+
   times <- sort(unique(test_surv$Event_time))
+
+  # Brier Score via pec
   pec_res <- pec::pec(
     object = list("Cox" = cox_fit),
     formula = Surv(Event_time, Event) ~ sex + diet,
     data = test_surv,
-    train_data = train_surv
+    traindata = train_surv,  # note: 'traindata' not 'train_data'
+    times = times
   )
   print(pec_res)
+  print(pec::ibs(pec_res))  # Integrated Brier Score (one summary number)
+
+  # Time-dependent AUC via timeROC
+
+  lp <- predict(cox_fit, newdata = test_surv, type = "lp")  # linear predictor
+
+  auc_res <- timeROC::timeROC(
+    T = test_surv$Event_time,
+    delta = test_surv$Event,
+    marker = lp,
+    cause = 1,
+    times = times,
+    iid = FALSE
+  )
+  print(auc_res$AUC)  # AUC at each time point
 
   print("Calculating C-index")
   cindex_res <- pec::cindex(
@@ -140,7 +163,7 @@ for (i in seq_along(folds)) {
     formula = Surv(Event_time, Event) ~ sex + diet,
     data = test_surv,
     eval.times = sort(unique(test_surv$Event_time)),
-    splitMethod = "none"   # since you're manually looping folds
+    splitMethod = "none"   # manually looping folds
   )
   print(cindex_res$AppCindex)
 
